@@ -1,0 +1,185 @@
+# BSDataSuite – Cursor Rules
+
+Du hilfst beim Entwickeln von BSDataSuite, einem ProcessWire-Modul das als persönliche Suite folgende Tools in einem einzigen PW-Backend-Modul vereint: Kanban, Kalender, Wiki, Bookmarks, Projektmanagement, CRM light, flexible Datenbank und Mediathek. Zusätzlich gibt es eine REST-API und später eine Claude-API-Integration.
+
+---
+
+## Projektkontext
+
+- **Framework:** ProcessWire 3.x (PHP)
+- **Modul-Typ:** Process-Modul (Backend)
+- **Namespace:** `ProcessWire`
+- **Hauptdatei:** `BSDataSuite.module`
+- **PHP-Version:** 8.x
+- **Entwicklungsumgebung:** Lokal, kein Deployment-Automatismus
+
+---
+
+## Kernprinzip
+
+**Alles ist eine ProcessWire-Seite.** Kanban-Karte, Kalender-Termin, Wiki-Eintrag, Kontakt, Bookmark – alles sind PW-Seiten mit demselben universellen Field-Grundstock (`bsds_`-Präfix). Der Charakter eines Tools (Kanban, Kalender, etc.) entsteht durch die View, nicht durch verschiedene Datenspeicher.
+
+---
+
+## Namenskonventionen – immer einhalten
+
+- **Modulname/Klassenname:** `BSDataSuite` (PascalCase)
+- **Tool-Klassen:** `BSKanban`, `BSCalendar`, `BSWiki`, `BSBookmarks`, `BSProjects`, `BSContacts`, `BSDatabase`, `BSMedia`
+- **Field-Präfix:** `bsds_` (z.B. `bsds_status`, `bsds_due_date`)
+- **Template-Präfix:** `bsds_` (z.B. `bsds_kanban_item`, `bsds_event`)
+- **PW-Seiten-Namen:** `bsds-` (z.B. `bsds-kanban`, `bsds-root`)
+- **CSS-Klassen:** `bsds-` (z.B. `bsds-board`, `bsds-card`)
+- **JS-Namespace:** `BSDS` (z.B. `BSDS.kanban.init()`)
+
+---
+
+## Verzeichnisstruktur
+
+```
+site/modules/BSDataSuite/
+├── BSDataSuite.module
+├── BSDataSuite.info.php
+├── /src
+│   ├── BSRouter.php
+│   ├── BSInstaller.php
+│   ├── BSApi.php
+│   ├── BSClaudeApi.php
+│   └── /tools
+│       ├── BSKanban.php
+│       ├── BSCalendar.php
+│       ├── BSWiki.php
+│       ├── BSBookmarks.php
+│       ├── BSProjects.php
+│       ├── BSContacts.php
+│       ├── BSDatabase.php
+│       └── BSMedia.php
+├── /views
+│   ├── dashboard.php
+│   ├── kanban.php
+│   ├── calendar.php
+│   ├── wiki.php
+│   ├── bookmarks.php
+│   ├── projects.php
+│   ├── contacts.php
+│   ├── database.php
+│   └── media.php
+├── /assets
+│   ├── /css/bsdatasuite.css
+│   └── /js/bsdatasuite.js
+├── /libs
+│   ├── /sortable
+│   ├── /fullcalendar
+│   ├── /tiptap
+│   ├── /tabulator
+│   ├── /jsonforms
+│   └── /dropzone
+└── /api
+    └── index.php
+```
+
+---
+
+## PHP-Regeln
+
+- Immer `<?php namespace ProcessWire;` am Anfang jeder Klassen-Datei
+- Keine globalen Funktionen – alles in Klassen
+- ProcessWire-API immer über `wire()` oder `$this->wire()` aufrufen, nie direkt über Globals
+- Neue Seiten immer nach diesem Muster anlegen:
+  ```php
+  $p = new Page();
+  $p->template = 'bsds_xxx';
+  $p->parent   = wire('pages')->get('name=bsds-xxx');
+  $p->title    = $data['title'];
+  // bsds_ Fields setzen
+  $p->save();
+  ```
+- `uninstall()` muss alles sauber entfernen was `install()` angelegt hat (Fields, Templates, Seiten) – in umgekehrter Reihenfolge: erst Seiten, dann Templates, dann Fields
+- Fehler immer mit `throw new WireException()` werfen, nie mit `die()` oder `exit()`
+
+---
+
+## JavaScript-Regeln
+
+- Kein jQuery – natives JS oder die eingebundenen Libs
+- Alle AJAX-Calls gehen an PW-interne Endpoints des Moduls, nicht an die REST-API
+- REST-API ist nur für externe Zugriffe
+- JS-Code immer in `BSDS`-Namespace:
+  ```javascript
+  const BSDS = BSDS || {};
+  BSDS.kanban = {
+      init() { ... },
+  };
+  ```
+- Externe Libs leben in `/libs/`, nie CDN
+
+---
+
+## REST-API Regeln
+
+- Endpoint: `/bsds-api/{tool}/`
+- Authentifizierung: `X-BSDS-Key` Header
+- Immer JSON zurückgeben: `{ "status": 200, "data": {...} }`
+- Methoden: GET (lesen), POST (erstellen), PATCH (aktualisieren), DELETE (löschen)
+- Jeder neue Tool-Endpoint wird in `BSApi::$routes` registriert
+
+---
+
+## ProcessWire-spezifische Regeln
+
+- PW-Hooks für Automatisierungen bevorzugen (z.B. `Pages::saved`)
+- `$pages->find()` für Datenbankabfragen, keine direkten SQL-Queries
+- Fields und Templates immer programmatisch anlegen, nie manuell über das PW-Backend
+- PW-Sanitizer für alle Inputs: `$sanitizer->text()`, `$sanitizer->url()`, etc.
+- Berechtigungen via PW-eigenes Rollen-System, keine eigene Auth-Logik
+
+---
+
+## Externe Bibliotheken
+
+| Lib | Zweck | Wo eingebunden |
+|---|---|---|
+| Sortable.js | Kanban drag & drop | `/libs/sortable/` |
+| FullCalendar.js | Kalender-View | `/libs/fullcalendar/` |
+| TipTap | Rich Text Editor (Wiki) | `/libs/tiptap/` |
+| Tabulator.js | Tabellen, Listen, Datenbank | `/libs/tabulator/` |
+| JSON Forms | Formular-Generierung | `/libs/jsonforms/` |
+| Dropzone.js | Datei-Upload | `/libs/dropzone/` |
+
+---
+
+## Phasenplan (aktueller Stand)
+
+- **Phase 1 – Fundament:** Modul-Grundstruktur, Fields, Templates, Dashboard, REST-API-Stub
+- **Phase 2 – Kanban:** Boards, Spalten, Karten, Sortable.js
+- **Phase 3 – Kalender:** FullCalendar, mehrere Kalender, iCal-Export
+- **Phase 4 – Wiki:** TipTap, Hierarchie, interne Verlinkung
+- **Phase 5 – Bookmarks:** URL-Fetch, Tags, Filter
+- **Phase 6 – Projekte:** Projekte, Aufgaben, Meilensteine
+- **Phase 7 – CRM Light:** Kontakte, Notizen, Nächste Schritte
+- **Phase 8 – Flexible Datenbank:** JSON Schema → PW-Fields, JSON Forms
+- **Phase 9 – Mediathek:** Dropzone, Grid-View, Zuordnung
+- **Phase 10 – Claude API:** Interner Chat, BSDataSuite-Inhalte als Kontext
+
+**Immer nur eine Phase auf einmal implementieren.** Nach jeder Phase muss das Modul installierbar, nutzbar und deinstallierbar sein.
+
+---
+
+## Was du nicht tun sollst
+
+- Keine direkten SQL-Queries (`$database->query()` nur wenn wirklich kein anderer Weg)
+- Keine CDN-Links für externe Libs
+- Keine Änderungen am PW-Kern
+- Keine Abhängigkeiten zu anderen PW-Modulen (außer PW-Kern selbst)
+- Kein jQuery
+- Keine globalen PHP-Funktionen außerhalb von Klassen
+- `BSClaudeApi.php` in Phase 1–9 nicht befüllen – nur als Stub stehen lassen
+
+---
+
+## Wenn du Code schreibst
+
+1. Welche Phase ist das? Halte dich an den Phasenplan
+2. Folge den Namenskonventionen exakt
+3. Neuer Code in die richtige Datei der Verzeichnisstruktur
+4. Am Ende jeder Phase: gibt es einen sauberen `install()` und `uninstall()`?
+5. REST-API-Endpoint für das Tool mitanlegen oder aktualisieren
