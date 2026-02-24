@@ -7,24 +7,45 @@
 ```
 site/modules/BSDataSuite/
 │
-├── BSDataSuite.module              # Hauptklasse, Install/Uninstall, Router
+├── BSDataSuite.module              # Hauptklasse, Install/Uninstall, Bootstrap
 ├── BSDataSuite.info.php            # Modul-Metadaten
 ├── README.md
+├── DEPENDENCIES.md                 # Lib-Versionen dokumentiert
 │
-├── /src                            # PHP-Klassen
-│   ├── BSRouter.php                # View-Router
-│   ├── BSInstaller.php             # Fields, Templates, Seiten anlegen/entfernen
-│   ├── BSApi.php                   # REST-API Handler
-│   ├── BSClaudeApi.php             # Claude API (Phase 10, Stub von Anfang an)
-│   └── /tools
-│       ├── BSKanban.php
-│       ├── BSCalendar.php
-│       ├── BSWiki.php
-│       ├── BSBookmarks.php
-│       ├── BSProjects.php
-│       ├── BSContacts.php
-│       ├── BSDatabase.php          # Flexible Datenbank
-│       └── BSMedia.php
+├── /src
+│   ├── /Domain                     # Business-Logik pro Tool
+│   │   ├── Kanban/
+│   │   │   ├── KanbanService.php
+│   │   │   └── KanbanBoard.php
+│   │   ├── Calendar/
+│   │   ├── Wiki/
+│   │   ├── Bookmarks/
+│   │   ├── Projects/
+│   │   ├── Contacts/
+│   │   ├── Database/
+│   │   └── Media/
+│   │
+│   ├── /Api                        # REST-Controller
+│   │   ├── BSApi.php               # Router + Auth
+│   │   ├── BSApiResponse.php       # Einheitliche JSON-Responses
+│   │   └── /Controllers
+│   │       ├── KanbanApiController.php
+│   │       ├── CalendarApiController.php
+│   │       └── ...
+│   │
+│   ├── /Admin                      # Backend-Controller (Process-Views)
+│   │   ├── BSRouter.php
+│   │   └── /Controllers
+│   │       ├── DashboardController.php
+│   │       ├── KanbanController.php    # render(), handleAjax(), assets()
+│   │       ├── CalendarController.php
+│   │       └── ...
+│   │
+│   └── /Infrastructure             # Querschnittsthemen
+│       ├── BSInstaller.php         # Fields, Templates, Seiten
+│       ├── BSLogger.php            # Logging mit Debug-Toggle
+│       ├── BSAuth.php              # CSRF, Permissions
+│       └── BSClaudeApi.php         # Claude API (Phase 10, Stub)
 │
 ├── /views                          # PHP-Templates für die Views
 │   ├── dashboard.php
@@ -41,15 +62,15 @@ site/modules/BSDataSuite/
 │   ├── /css
 │   │   └── bsdatasuite.css
 │   └── /js
-│       └── bsdatasuite.js          # Eigenes JS, Tool-übergreifend
+│       └── bsdatasuite.js          # BSDS-Namespace, Tool-übergreifend
 │
 ├── /libs                           # Alle externen Libs lokal, nie CDN
-│   ├── /sortable
-│   ├── /fullcalendar
-│   ├── /tiptap
-│   ├── /tabulator
-│   ├── /jsonforms
-│   └── /dropzone
+│   ├── /sortable                   # + LICENSE
+│   ├── /fullcalendar               # + LICENSE
+│   ├── /tiptap                     # + LICENSE
+│   ├── /tabulator                  # + LICENSE
+│   ├── /jsonforms                  # + LICENSE
+│   └── /dropzone                   # + LICENSE
 │
 └── /api                            # REST-API Endpoint
     └── index.php
@@ -62,12 +83,13 @@ site/modules/BSDataSuite/
 | Was | Konvention | Beispiel |
 |---|---|---|
 | Modulname | PascalCase | `BSDataSuite` |
-| PHP-Klassenname | PascalCase | `BSDataSuite`, `BSKanban` |
-| Field-Präfix | `bsds_` | `bsds_status`, `bsds_due_date` |
+| PHP-Klassenname | PascalCase | `KanbanService`, `BSInstaller` |
+| Field-Präfix | `bsds_` | `bsds_status`, `bsds_due_date`, `bsds_type` |
 | Template-Präfix | `bsds_` | `bsds_kanban_item` |
 | Seiten-Name | `bsds-` | `bsds-kanban`, `bsds-root` |
 | CSS-Klassen | `bsds-` | `bsds-board`, `bsds-card` |
 | JS-Namespace | `BSDS` | `BSDS.kanban.init()` |
+| Managed-Marking | `BSDS_MANAGED` | Field/Template description |
 
 ---
 
@@ -97,18 +119,18 @@ class BSDataSuite extends Process {
     }
 
     public function init() {
+        // Autoloader für /src (alle Unterordner)
+        spl_autoload_register(function($class) {
+            $dirs = ['Domain', 'Api', 'Api/Controllers', 'Admin', 'Admin/Controllers', 'Infrastructure'];
+            foreach($dirs as $dir) {
+                $file = __DIR__ . "/src/{$dir}/{$class}.php";
+                if(file_exists($file)) { require_once($file); return; }
+            }
+        });
+
         // Assets einbinden
-        $this->config->scripts->add($this->urls->BSDataSuite . 'libs/sortable/sortable.min.js');
         $this->config->scripts->add($this->urls->BSDataSuite . 'assets/js/bsdatasuite.js');
         $this->config->styles->add($this->urls->BSDataSuite . 'assets/css/bsdatasuite.css');
-
-        // Autoloader für /src
-        spl_autoload_register(function($class) {
-            $file = __DIR__ . '/src/' . $class . '.php';
-            if(file_exists($file)) require_once($file);
-            $file = __DIR__ . '/src/tools/' . $class . '.php';
-            if(file_exists($file)) require_once($file);
-        });
     }
 
     public function ___execute() {
@@ -124,7 +146,7 @@ class BSDataSuite extends Process {
 
     public function ___uninstall() {
         $installer = new BSInstaller($this);
-        $installer->uninstall();
+        $installer->uninstall(); // safe mode – siehe BSInstaller
         parent::___uninstall();
     }
 }
@@ -141,15 +163,16 @@ class BSInstaller {
 
     protected $module;
 
-    public function __construct(BSDataSuite $module) {
-        $this->module = $module;
-    }
+    // Registry: welche IDs wurden angelegt (gespeichert in Modul-Config)
+    protected $registry = ['fields' => [], 'templates' => [], 'pages' => []];
 
-    // Universeller Field-Grundstock – lieber zu viel als zu wenig
+    // Universeller Field-Grundstock
     protected $fieldDefinitions = [
+        // Typ-Pflichtfeld (semantische Klarheit + Migrationsfähigkeit)
+        'bsds_type'         => ['type' => 'FieldtypeText',      'label' => 'Typ'],
 
         // Inhalt
-        'bsds_body'         => ['type' => 'FieldtypeTextarea',  'label' => 'Inhalt',              'contentType' => 1],
+        'bsds_body'         => ['type' => 'FieldtypeTextarea',  'label' => 'Inhalt', 'contentType' => 1],
         'bsds_summary'      => ['type' => 'FieldtypeText',      'label' => 'Zusammenfassung'],
 
         // Zeit
@@ -163,11 +186,11 @@ class BSInstaller {
         'bsds_priority'     => ['type' => 'FieldtypeOptions',   'label' => 'Priorität'],
         'bsds_visibility'   => ['type' => 'FieldtypeOptions',   'label' => 'Sichtbarkeit'],
 
-        // Verknüpfungen (Page References)
-        'bsds_tags'         => ['type' => 'FieldtypePage',      'label' => 'Tags',                'derefAsPage' => 0],
-        'bsds_project'      => ['type' => 'FieldtypePage',      'label' => 'Projekt',             'derefAsPage' => 1],
-        'bsds_contacts'     => ['type' => 'FieldtypePage',      'label' => 'Kontakte',            'derefAsPage' => 0],
-        'bsds_related'      => ['type' => 'FieldtypePage',      'label' => 'Verwandte Seiten',    'derefAsPage' => 0],
+        // Verknüpfungen
+        'bsds_tags'         => ['type' => 'FieldtypePage',      'label' => 'Tags',             'derefAsPage' => 0],
+        'bsds_project'      => ['type' => 'FieldtypePage',      'label' => 'Projekt',          'derefAsPage' => 1],
+        'bsds_contacts'     => ['type' => 'FieldtypePage',      'label' => 'Kontakte',         'derefAsPage' => 0],
+        'bsds_related'      => ['type' => 'FieldtypePage',      'label' => 'Verwandte Seiten', 'derefAsPage' => 0],
 
         // Medien
         'bsds_images'       => ['type' => 'FieldtypeImage',     'label' => 'Bilder'],
@@ -181,38 +204,109 @@ class BSInstaller {
         'bsds_position'     => ['type' => 'FieldtypeInteger',   'label' => 'Position/Reihenfolge'],
     ];
 
-    // Seitenstruktur
-    protected $pageStructure = [
-        ['name' => 'bsds-root',      'title' => 'BSDataSuite',  'parent' => '/',         'template' => 'admin'],
-        ['name' => 'bsds-kanban',    'title' => 'Kanban',       'parent' => 'bsds-root', 'template' => 'admin'],
-        ['name' => 'bsds-calendar',  'title' => 'Kalender',     'parent' => 'bsds-root', 'template' => 'admin'],
-        ['name' => 'bsds-wiki',      'title' => 'Wiki',         'parent' => 'bsds-root', 'template' => 'admin'],
-        ['name' => 'bsds-bookmarks', 'title' => 'Bookmarks',    'parent' => 'bsds-root', 'template' => 'admin'],
-        ['name' => 'bsds-projects',  'title' => 'Projekte',     'parent' => 'bsds-root', 'template' => 'admin'],
-        ['name' => 'bsds-contacts',  'title' => 'Kontakte',     'parent' => 'bsds-root', 'template' => 'admin'],
-        ['name' => 'bsds-database',  'title' => 'Datenbanken',  'parent' => 'bsds-root', 'template' => 'admin'],
-        ['name' => 'bsds-media',     'title' => 'Mediathek',    'parent' => 'bsds-root', 'template' => 'admin'],
-        ['name' => 'bsds-tags',      'title' => 'Tags',         'parent' => 'bsds-root', 'template' => 'admin'],
-    ];
-
     public function install() {
         $this->createFields();
         $this->createTemplates();
         $this->createPages();
+        $this->saveRegistry();
     }
 
+    /**
+     * Safe mode uninstall:
+     * - Entfernt nur Assets die mit BSDS_MANAGED markiert sind
+     * - Entfernt nur Seiten/Templates die nachweislich leer sind
+     * - Alles andere: bleibt, wird im Log dokumentiert
+     */
     public function uninstall() {
-        $this->removePages();
-        $this->removeTemplates();
-        $this->removeFields();
+        $this->loadRegistry();
+        $this->removePages();     // nur leere
+        $this->removeTemplates(); // nur ohne Seiten
+        $this->removeFields();    // nur ohne Templates
     }
 
-    protected function createFields() { /* ... */ }
-    protected function createTemplates() { /* ... */ }
-    protected function createPages() { /* ... */ }
-    protected function removePages() { /* ... */ }
-    protected function removeTemplates() { /* ... */ }
-    protected function removeFields() { /* ... */ }
+    protected function markAsManaged(Field|Template $asset) {
+        $asset->description = 'BSDS_MANAGED – ' . ($asset->description ?? '');
+        $asset->save();
+    }
+
+    // createFields(), createTemplates(), createPages(),
+    // removeFields(), removeTemplates(), removePages(),
+    // saveRegistry(), loadRegistry() werden vollständig implementiert
+}
+```
+
+---
+
+## BSAuth.php – CSRF & Permissions
+
+```php
+<?php namespace ProcessWire;
+
+class BSAuth {
+
+    public function csrfToken(): string {
+        return wire('session')->CSRF->getTokenName() . ':' . wire('session')->CSRF->getTokenValue();
+    }
+
+    public function verifyCsrf(): bool {
+        return wire('session')->CSRF->hasValidToken();
+    }
+
+    public function checkPermission(string $permission): bool {
+        return wire('user')->hasPermission($permission);
+    }
+
+    public function requirePermission(string $permission): void {
+        if(!$this->checkPermission($permission)) {
+            throw new WireException('Permission denied: ' . $permission, 403);
+        }
+    }
+}
+```
+
+---
+
+## Admin-Controller – einheitliches Interface
+
+```php
+<?php namespace ProcessWire;
+
+abstract class BSAdminController {
+
+    protected $module;
+    protected $auth;
+
+    public function __construct(BSDataSuite $module) {
+        $this->module = $module;
+        $this->auth   = new BSAuth();
+    }
+
+    abstract public function render(): string;
+    abstract public function handleAjax(): void;
+    abstract public function assets(): void;
+}
+
+// Beispiel: KanbanController
+class KanbanController extends BSAdminController {
+
+    public function render(): string {
+        $this->auth->requirePermission('bsds-kanban-view');
+        ob_start();
+        include __DIR__ . '/../../views/kanban.php';
+        return ob_get_clean();
+    }
+
+    public function handleAjax(): void {
+        $this->auth->verifyCsrf() or throw new WireException('CSRF', 403);
+        $action = wire('input')->post('action');
+        // createCard, moveCard, deleteCard ...
+    }
+
+    public function assets(): void {
+        wire('config')->scripts->add(
+            wire('config')->urls->BSDataSuite . 'libs/sortable/sortable.min.js'
+        );
+    }
 }
 ```
 
@@ -227,30 +321,40 @@ class BSRouter {
 
     protected $module;
 
-    protected $allowed = [
-        'dashboard', 'kanban', 'calendar', 'wiki',
-        'bookmarks', 'projects', 'contacts', 'database', 'media'
+    protected $map = [
+        'dashboard' => DashboardController::class,
+        'kanban'    => KanbanController::class,
+        'calendar'  => CalendarController::class,
+        'wiki'      => WikiController::class,
+        'bookmarks' => BookmarksController::class,
+        'projects'  => ProjectsController::class,
+        'contacts'  => ContactsController::class,
+        'database'  => DatabaseController::class,
+        'media'     => MediaController::class,
     ];
 
-    public function __construct(BSDataSuite $module) {
-        $this->module = $module;
-    }
-
-    public function route() {
+    public function route(): string {
         $segment = wire('input')->urlSegment1 ?: 'dashboard';
-        if(!in_array($segment, $this->allowed)) $segment = 'dashboard';
+        if(!isset($this->map[$segment])) $segment = 'dashboard';
 
-        $viewFile = dirname(__DIR__) . "/views/{$segment}.php";
-        ob_start();
-        include($viewFile);
-        return ob_get_clean();
+        $isAjax = wire('config')->ajax;
+        $class   = $this->map[$segment];
+        $ctrl    = new $class($this->module);
+        $ctrl->assets();
+
+        if($isAjax) {
+            $ctrl->handleAjax();
+            exit; // handleAjax() gibt JSON aus und beendet
+        }
+
+        return $ctrl->render();
     }
 }
 ```
 
 ---
 
-## BSApi.php – REST von Anfang an
+## BSApi.php – REST
 
 ```php
 <?php namespace ProcessWire;
@@ -258,49 +362,49 @@ class BSRouter {
 class BSApi {
 
     protected $routes = [
-        'kanban'     => 'handleKanban',
-        'calendar'   => 'handleCalendar',
-        'wiki'       => 'handleWiki',
-        'bookmarks'  => 'handleBookmarks',
-        'projects'   => 'handleProjects',
-        'contacts'   => 'handleContacts',
-        'database'   => 'handleDatabase',
-        'media'      => 'handleMedia',
+        'kanban'     => KanbanApiController::class,
+        'calendar'   => CalendarApiController::class,
+        'wiki'       => WikiApiController::class,
+        'bookmarks'  => BookmarksApiController::class,
+        'projects'   => ProjectsApiController::class,
+        'contacts'   => ContactsApiController::class,
+        'database'   => DatabaseApiController::class,
+        'media'      => MediaApiController::class,
     ];
 
-    public function handle($endpoint, $method, $data = []) {
+    public function handle(string $endpoint, string $method, array $data = []): void {
         if(!$this->authenticate()) {
-            return $this->response(401, 'Unauthorized');
+            BSApiResponse::error(401, 'Unauthorized');
+        }
+        if(!$this->checkScope($endpoint, $method)) {
+            BSApiResponse::error(403, 'Forbidden');
         }
         if(!isset($this->routes[$endpoint])) {
-            return $this->response(404, 'Endpoint not found');
+            BSApiResponse::error(404, 'Not found');
         }
-        return $this->{$this->routes[$endpoint]}($method, $data);
+
+        $this->logRequest($endpoint, $method);
+
+        $ctrl = new $this->routes[$endpoint]();
+        $ctrl->handle($method, $data);
     }
 
-    protected function authenticate() {
+    protected function authenticate(): bool {
         $key = wire('input')->requestHeader('X-BSDS-Key');
-        return $key === wire('modules')->get('BSDataSuite')->apiKey;
+        if(!$key) return false;
+        return password_verify($key, wire('modules')->get('BSDataSuite')->apiKeyHash);
     }
 
-    protected function pageToArray(Page $page) {
-        // Universelle Umwandlung einer PW-Seite in JSON-fähiges Array
-        return [
-            'id'       => $page->id,
-            'title'    => $page->title,
-            'name'     => $page->name,
-            'url'      => $page->url,
-            'created'  => $page->created,
-            'modified' => $page->modified,
-            // bsds_ Fields werden von den einzelnen Handlern ergänzt
-        ];
+    protected function checkScope(string $endpoint, string $method): bool {
+        $scope = wire('input')->requestHeader('X-BSDS-Scope') ?: 'read';
+        if(in_array($method, ['POST', 'PATCH', 'DELETE']) && $scope !== 'write') return false;
+        return true;
     }
 
-    protected function response($code, $data) {
-        http_response_code($code);
-        header('Content-Type: application/json');
-        echo json_encode(['status' => $code, 'data' => $data]);
-        exit;
+    protected function logRequest(string $endpoint, string $method): void {
+        // Audit-Log: Zeitpunkt, Endpoint, Methode, IP
+        $logger = new BSLogger();
+        $logger->log('api', "{$method} {$endpoint} – " . wire('session')->getIP());
     }
 }
 ```
@@ -314,34 +418,35 @@ class BSApi {
 
 class BSClaudeApi {
 
-    protected $apiKey;
-    protected $model    = 'claude-opus-4-6';
-    protected $endpoint = 'https://api.anthropic.com/v1/messages';
+    protected string $apiKey   = '';
+    protected string $model    = 'claude-opus-4-6';
+    protected string $endpoint = 'https://api.anthropic.com/v1/messages';
 
     public function __construct() {
         $this->apiKey = wire('modules')->get('BSDataSuite')->claudeApiKey ?? '';
     }
 
     /**
-     * Frage an Claude stellen mit optionalem BSDataSuite-Kontext
+     * Frage an Claude mit optionalem BSDataSuite-Kontext
      * @param string $question
-     * @param array  $tools  Welche Tools als Kontext mitgegeben werden ['kanban', 'wiki', ...]
-     * @return string
+     * @param array  $tools  z.B. ['kanban', 'wiki', 'projects']
      */
     public function ask(string $question, array $tools = []): string {
-        // Wird in Phase 10 implementiert
+        // Phase 10
         return '';
     }
 
     protected function buildContext(array $tools = []): string {
-        // Sammelt Inhalte aus gewählten Tools und baut Kontext-String
-        // Wird in Phase 10 implementiert
+        // Sammelt Inhalte aus gewählten Tools
+        // Redaction: E-Mail, Tel, private Notizen werden gefiltert
+        // Token-Budgeting: Kontext wird gecapped
+        // Phase 10
         return '';
     }
 
     protected function call(array $payload): array {
         // Direkter cURL-Call, kein SDK
-        // Wird in Phase 10 implementiert
+        // Phase 10
         return [];
     }
 }
@@ -351,88 +456,73 @@ class BSClaudeApi {
 
 ## Datenprinzip – wie Tools Seiten anlegen
 
-Jedes Tool folgt exakt demselben Muster. Kein Sonderweg.
-
 ```php
-// Beispiel: Kanban-Karte via AJAX erstellen
-public function createCard(array $data): Page {
-    $p = new Page();
-    $p->template      = 'bsds_kanban_item';
-    $p->parent        = wire('pages')->get('name=bsds-kanban');
-    $p->title         = $data['title'];
-    $p->bsds_status   = $data['status']   ?? 'open';
-    $p->bsds_project  = $data['project']  ?? null;
-    $p->bsds_position = $data['position'] ?? 0;
-    $p->save();
-    return $p;
-}
+// Jedes Tool – immer dasselbe Muster
+$p = new Page();
+$p->template      = 'bsds_kanban_item';
+$p->parent        = wire('pages')->get('name=bsds-kanban');
+$p->title         = $sanitizer->text($data['title']);
+$p->bsds_type     = 'kanban_item';      // Pflicht
+$p->bsds_status   = $data['status']   ?? 'open';
+$p->bsds_project  = $data['project']  ?? null;
+$p->bsds_position = $data['position'] ?? 0;
 
-// Dasselbe Muster für Kalender-Termin, Wiki-Eintrag, Kontakt, Bookmark
-// Immer: new Page() → Felder setzen → $p->save()
-// Immer aufgerufen via AJAX aus der jeweiligen View
+try {
+    $p->save();
+} catch(WireException $e) {
+    BSLogger::error('kanban', 'createCard failed: ' . $e->getMessage());
+    BSApiResponse::error(500, 'Save failed');
+}
 ```
 
 ---
 
-## Datenfluss (Request → Response)
+## Datenfluss
 
 ```
 Browser
-  ↓ URL: /admin/bsdatasuite/kanban/
+  ↓ /admin/bsdatasuite/kanban/
+BSDataSuite::___execute()
   ↓
-BSDataSuite.module
-  ↓ ___execute()
-BSRouter
+BSRouter::route()
   ↓ segment = 'kanban'
-views/kanban.php
-  ↓ instanziiert BSKanban
-  ↓ $pages->find('template=bsds_kanban_item') holt Daten
-  ↓ Sortable.js rendert Board
-  ↓ User verschiebt Karte → AJAX POST
-BSKanban::updateCard()
+KanbanController::assets()   → lädt Sortable.js
+KanbanController::render()   → views/kanban.php → KanbanService → $pages->find()
+
+User verschiebt Karte → AJAX POST
+  ↓
+KanbanController::handleAjax()
+  ↓ CSRF prüfen → Permission prüfen
+KanbanService::moveCard()
   ↓ $page->bsds_status = 'done' → $page->save()
   ↓ JSON Response
-Browser aktualisiert UI
 
-Parallel:
-  /bsds-api/kanban/ → BSApi::handleKanban() → JSON für externe Seiten
+Parallel extern:
+GET /bsds-api/kanban/  →  BSApi::handle()  →  KanbanApiController  →  JSON
 ```
 
 ---
 
-## REST-API Endpunkte (wächst pro Phase)
+## REST-Endpunkte
 
-| Endpoint | Methoden | Beschreibung |
+| Endpoint | Methoden | Scope |
 |---|---|---|
-| `/bsds-api/kanban/` | GET, POST, PATCH, DELETE | Boards und Karten |
-| `/bsds-api/calendar/` | GET, POST, PATCH, DELETE | Kalender und Termine |
-| `/bsds-api/wiki/` | GET, POST, PATCH, DELETE | Wiki-Einträge |
-| `/bsds-api/bookmarks/` | GET, POST, DELETE | Bookmarks |
-| `/bsds-api/projects/` | GET, POST, PATCH, DELETE | Projekte und Aufgaben |
-| `/bsds-api/contacts/` | GET, POST, PATCH, DELETE | Kontakte |
-| `/bsds-api/database/{collection}/` | GET, POST, PATCH, DELETE | Flexible Datenbanken |
-| `/bsds-api/media/` | GET, POST, DELETE | Mediathek |
+| `/bsds-api/kanban/` | GET, POST, PATCH, DELETE | read / write |
+| `/bsds-api/calendar/` | GET, POST, PATCH, DELETE | read / write |
+| `/bsds-api/wiki/` | GET, POST, PATCH, DELETE | read / write |
+| `/bsds-api/bookmarks/` | GET, POST, DELETE | read / write |
+| `/bsds-api/projects/` | GET, POST, PATCH, DELETE | read / write |
+| `/bsds-api/contacts/` | GET, POST, PATCH, DELETE | read / write |
+| `/bsds-api/database/{collection}/` | GET, POST, PATCH, DELETE | read / write |
+| `/bsds-api/media/` | GET, POST, DELETE | read / write |
 
-Authentifizierung: `X-BSDS-Key: {apiKey}` Header
-
----
-
-## Modul-Einstellungen (Module Config)
-
-```php
-// Felder die im Modul-Config-Formular erscheinen
-protected $configFields = [
-    'apiKey'       => '',   // REST-API Key
-    'claudeApiKey' => '',   // Claude API Key (Phase 10)
-    'adminTheme'   => '',   // optionales Theme
-];
-```
+Authentifizierung: `X-BSDS-Key: {key}` + `X-BSDS-Scope: read|write`
 
 ---
 
 ## Templates Übersicht
 
-| Template-Name | Verwendung |
+| Template | Verwendung |
 |---|---|
 | `bsds_kanban_board` | Kanban Board (Parent) |
 | `bsds_kanban_item` | Kanban Karte |
@@ -444,8 +534,10 @@ protected $configFields = [
 | `bsds_project` | Projekt |
 | `bsds_task` | Aufgabe |
 | `bsds_contact` | Kontakt |
-| `bsds_note` | Notiz (zu Kontakt, Projekt, etc.) |
+| `bsds_note` | Notiz |
 | `bsds_collection` | Flexible Datenbank (Parent) |
 | `bsds_record` | Datensatz in flexibler Datenbank |
 | `bsds_media_item` | Mediathek-Eintrag |
 | `bsds_tag` | Tag |
+
+Alle Templates haben `BSDS_MANAGED` in der Description.

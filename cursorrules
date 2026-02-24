@@ -1,0 +1,191 @@
+# BSDataSuite – Cursor Rules
+
+Du hilfst beim Entwickeln von BSDataSuite, einem ProcessWire-Modul das als persönliche Suite folgende Tools in einem einzigen PW-Backend-Modul vereint: Kanban, Kalender, Wiki, Bookmarks, Projektmanagement, CRM light, flexible Datenbank und Mediathek. Zusätzlich gibt es eine REST-API und später eine Claude-API-Integration.
+
+---
+
+## Projektkontext
+
+- **Framework:** ProcessWire 3.x (PHP 8.x)
+- **Modul-Typ:** Process-Modul (Backend)
+- **Namespace:** `ProcessWire`
+- **Hauptdatei:** `BSDataSuite.module`
+- **Entwicklungsumgebung:** Lokal, kein Deployment-Automatismus
+
+---
+
+## Kernprinzip
+
+**Alles ist eine ProcessWire-Seite.** Kanban-Karte, Kalender-Termin, Wiki-Eintrag, Kontakt, Bookmark – alles sind PW-Seiten mit demselben universellen Field-Grundstock (`bsds_`-Präfix). Der Charakter eines Tools entsteht durch die View, nicht durch verschiedene Datenspeicher.
+
+Das Pflichtfeld `bsds_type` gibt jedem Datensatz seine semantische Identität zusätzlich zum Template.
+
+---
+
+## Namenskonventionen – immer einhalten
+
+- **Modulname/Hauptklasse:** `BSDataSuite`
+- **Domain-Klassen:** `KanbanService`, `CalendarService`, etc. (kein BS-Präfix)
+- **Controller:** `KanbanController`, `KanbanApiController`
+- **Infrastruktur:** `BSInstaller`, `BSRouter`, `BSAuth`, `BSLogger`, `BSApi`, `BSClaudeApi`
+- **Field-Präfix:** `bsds_` – z.B. `bsds_status`, `bsds_type`, `bsds_due_date`
+- **Template-Präfix:** `bsds_` – z.B. `bsds_kanban_item`
+- **PW-Seiten-Namen:** `bsds-` – z.B. `bsds-kanban`
+- **CSS-Klassen:** `bsds-` – z.B. `bsds-board`
+- **JS-Namespace:** `BSDS` – z.B. `BSDS.kanban.init()`
+- **Managed-Marking:** `BSDS_MANAGED` in Field/Template description
+
+---
+
+## Interne Verzeichnisstruktur
+
+```
+/src
+  /Domain         – Business-Logik pro Tool (KanbanService, etc.)
+  /Api            – REST-Controller (BSApi, KanbanApiController, etc.)
+  /Admin          – Backend-Controller (BSRouter, KanbanController, etc.)
+  /Infrastructure – Querschnitt (BSInstaller, BSAuth, BSLogger, BSClaudeApi)
+/views            – PHP-View-Dateien
+/assets           – CSS + JS
+/libs             – Externe Libs lokal (nie CDN)
+/api              – REST-Endpoint index.php
+```
+
+---
+
+## PHP-Regeln
+
+- Immer `<?php namespace ProcessWire;` am Anfang jeder Datei
+- Keine globalen Funktionen – alles in Klassen
+- PW-API immer über `wire()` oder `$this->wire()` aufrufen
+- Alle User-Inputs immer sanitizen: `$sanitizer->text()`, `$sanitizer->url()`, etc.
+- Fehler immer mit `throw new WireException($msg, $code)` – nie `die()` oder `exit()`
+- Neuer Datensatz immer nach diesem Muster:
+  ```php
+  $p = new Page();
+  $p->template  = 'bsds_xxx';
+  $p->parent    = wire('pages')->get('name=bsds-xxx');
+  $p->title     = $sanitizer->text($data['title']);
+  $p->bsds_type = 'xxx'; // Pflicht
+  try { $p->save(); } catch(WireException $e) { /* loggen + Response */ }
+  ```
+
+---
+
+## Sicherheitsregeln – keine Ausnahmen
+
+- **CSRF:** Jede write-Action (POST/PATCH/DELETE) prüft CSRF via `BSAuth::verifyCsrf()`
+- **Permissions:** Jeder Controller-Aufruf prüft via `BSAuth::requirePermission()`
+- **API-Key:** Wird gehasht gespeichert, Vergleich nur via `password_verify()`
+- **API-Scopes:** GET = `read`, POST/PATCH/DELETE = `write` – wird in `BSApi` geprüft
+- **Sanitizing:** Kein Raw-Input landet je in `$page->save()`
+
+---
+
+## Admin-Controller Interface
+
+Jeder Admin-Controller erweitert `BSAdminController` und implementiert:
+```php
+public function render(): string      // HTML für die View
+public function handleAjax(): void    // JSON-Response für AJAX-Calls
+public function assets(): void        // JS/CSS für diesen Controller laden
+```
+
+---
+
+## uninstall() – safe mode
+
+`BSInstaller::uninstall()` entfernt **nur**:
+- Seiten die nachweislich keine User-Inhalte haben
+- Templates die keine Seiten mehr haben
+- Fields die keinem Template mehr zugewiesen sind
+
+Alles was `BSDS_MANAGED` in der Description hat aber noch Inhalte enthält: bleibt, wird im Log dokumentiert. Niemals silent Nutzerdaten löschen.
+
+---
+
+## JavaScript-Regeln
+
+- Kein jQuery – natives JS oder die eingebundenen Libs
+- Alle AJAX-Calls an PW-interne Endpoints des Moduls (nicht REST-API)
+- REST-API ist nur für externe Zugriffe
+- JS immer im `BSDS`-Namespace:
+  ```javascript
+  const BSDS = window.BSDS || {};
+  BSDS.kanban = { init() { ... } };
+  ```
+- Externe Libs in `/libs/`, nie CDN
+
+---
+
+## Externe Bibliotheken
+
+| Lib | Zweck |
+|---|---|
+| Sortable.js | Kanban drag & drop |
+| FullCalendar.js | Kalender-View |
+| TipTap | Wiki Editor (JSON-Format speichern) |
+| Tabulator.js | Tabellen/Listen überall |
+| JSON Forms | Formular-Generierung (Phase 8a) |
+| Dropzone.js | Datei-Upload |
+
+---
+
+## Phase 8 – Flexible Datenbank: zwei Stufen
+
+**Phase 8a (zuerst):** Daten landen in `bsds_meta` (JSON-Field). Keine neuen PW-Fields. JSON Forms + Tabulator.js reichen für die meisten Fälle.
+
+**Phase 8b (optional, später):** Erst wenn 8a sich als zu einschränkend erweist: Schema → echte PW-Fields mit Migrations-Logik.
+
+Nie 8b vor 8a implementieren.
+
+---
+
+## Phase 10 – Claude API: Stub bleibt Stub bis Phase 10
+
+`BSClaudeApi.php` existiert von Phase 1 an als leere Klasse. Keine Implementierung vor Phase 10. Dann:
+- Direkter cURL-Call (kein SDK)
+- Redaction sensibler Felder vor Kontext-Übergabe
+- Token-Budgeting / Chunking
+
+---
+
+## Phasenplan
+
+1. **Fundament** – Modul, Fields, Dashboard, REST-Stub, CSRF, Auth, Logging
+2. **Kanban** – Boards, Karten, Sortable.js, Positions-Logik
+3. **Kalender** – FullCalendar, iCal, Zeitzonen
+4. **Wiki** – TipTap (JSON), ID-basierte Links
+5. **Bookmarks** – URL-Fetch, Filter
+6. **Projekte** – Aufgaben, Meilensteine → Kalender
+7. **CRM Light** – Kontakte, Notizen, Nächste Schritte
+8a. **Flexible DB (JSON)** – Schema + bsds_meta
+8b. **Flexible DB (PW-Fields)** – optional
+9. **Mediathek** – Dropzone, Grid
+10. **Claude API** – Chat, Kontext, Redaction
+
+**Immer nur eine Phase auf einmal.** Nach jeder Phase: installierbar, nutzbar, deinstallierbar.
+
+---
+
+## Definition of Done (jede Phase)
+
+- Keine Fatal Errors, keine PHP Notices im Debug-Mode
+- CSRF und Permission-Checks greifen
+- Keine silent failures bei `$page->save()`
+- Debug-Logging erweitert
+- Upgrade von vorheriger Phase funktioniert
+
+---
+
+## Was du nicht tun sollst
+
+- Keine direkten SQL-Queries (nur wenn wirklich kein anderer Weg)
+- Keine CDN-Links
+- Keine Änderungen am PW-Kern
+- Keine Abhängigkeiten zu anderen PW-Modulen
+- Kein jQuery
+- Kein `die()` oder `exit()` außer in `BSApi` nach JSON-Response
+- `BSClaudeApi` in Phase 1–9 nicht befüllen
+- Phase 8b nicht vor 8a implementieren
+- Niemals `uninstall()` Nutzerdaten silent löschen lassen
